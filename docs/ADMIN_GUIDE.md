@@ -79,6 +79,21 @@ To delete those records, run the same command with `--apply`. Deletion is
 irreversible. The command removes only attendees whose meeting does not exist;
 it does not remove meetings or attendees linked to an existing meeting.
 
+## Orphan meeting cleanup
+
+Meetings whose BNX record no longer exists, and their attendees, require a
+separate explicit operation. Back up the site and stop concurrent activity or
+course deletions before reviewing the preview:
+
+```bash
+php public/mod/bigbluebuttonbn/extension/bnx_datahub/cli/cleanup_orphan_attendees.php --orphan-meetings
+```
+
+After reviewing both counts, add `--apply` to delete those meetings and their
+attendees. This irreversible operation does not delete meetings linked to an
+existing BNX record, or attendees linked to those meetings. The default command
+without `--orphan-meetings` continues to select only orphan attendees.
+
 ## Troubleshooting
 
 | Symptom | Check |

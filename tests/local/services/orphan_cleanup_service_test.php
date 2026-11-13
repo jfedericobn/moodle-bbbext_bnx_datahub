@@ -63,4 +63,47 @@ final class orphan_cleanup_service_test extends advanced_testcase {
         $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['id' => $attendeeids[2]]));
         $this->assertSame(0, orphan_cleanup_service::clean(true));
     }
+
+    /**
+     * Test orphan meeting preview and explicit cleanup preserve linked data.
+     */
+    public function test_orphan_meeting_cleanup_requires_explicit_apply(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        set_config('bigbluebuttonbn_meetingevents_enabled', 1);
+        $course = $this->getDataGenerator()->create_course();
+        $activity = $this->getDataGenerator()->create_module('bigbluebuttonbn', ['course' => $course->id]);
+        $bnx = $DB->get_record('bbbext_bnx', ['bigbluebuttonbnid' => $activity->id], '*', MUST_EXIST);
+        $user = $this->getDataGenerator()->create_user();
+        $meetings = [];
+        $attendees = [];
+        foreach ([$bnx->id, 0, 987654321] as $bnxid) {
+            $meetingid = $DB->insert_record('bbbext_bnx_datahub_meeting', (object) [
+                'bnxid' => $bnxid,
+                'externalmeetingid' => 'external-meeting',
+                'internalmeetingid' => 'internal-meeting',
+                'meetingname' => 'Meeting',
+            ]);
+            $meetings[] = $meetingid;
+            $attendees[] = $DB->insert_record('bbbext_bnx_datahub_meeting_user', (object) [
+                'meetingid' => $meetingid,
+                'userid' => $user->id,
+                'fullname' => 'Test user',
+                'attendeerole' => 'viewer',
+            ]);
+        }
+
+        $this->assertSame(['meetings' => 2, 'attendees' => 2], orphan_cleanup_service::clean_orphan_meetings());
+        $this->assertSame(3, $DB->count_records('bbbext_bnx_datahub_meeting'));
+        $this->assertSame(3, $DB->count_records('bbbext_bnx_datahub_meeting_user'));
+        $this->assertSame(['meetings' => 2, 'attendees' => 2], orphan_cleanup_service::clean_orphan_meetings(true));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetings[0]]));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['id' => $attendees[0]]));
+        foreach ([1, 2] as $index) {
+            $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetings[$index]]));
+            $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['id' => $attendees[$index]]));
+        }
+        $this->assertSame(['meetings' => 0, 'attendees' => 0], orphan_cleanup_service::clean_orphan_meetings(true));
+    }
 }

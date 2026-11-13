@@ -37,3 +37,21 @@ function bbbext_bnx_datahub_status_checks(): array {
         new \bbbext_bnx_datahub\check\bnreports_conflict(),
     ];
 }
+
+/**
+ * Capture the DataHub mapping before a course module is deleted.
+ *
+ * @param stdClass $cm Course module record.
+ */
+function bbbext_bnx_datahub_pre_course_module_delete(stdClass $cm): void {
+    \bbbext_bnx_datahub\observer::pre_course_module_delete($cm);
+}
+
+/**
+ * Capture the DataHub mappings before a course is deleted.
+ *
+ * @param stdClass $course Course record.
+ */
+function bbbext_bnx_datahub_pre_course_delete(stdClass $course): void {
+    \bbbext_bnx_datahub\observer::pre_course_delete($course);
+}

@@ -41,9 +41,19 @@ engagement records. Any schema change that adds user-linked data must update:
 
 DataHub does not impose a separate retention scheduler. Site administrators
 should apply their Moodle retention, backup, and privacy-erasure policies to
-the courses containing BigBlueButton activities. Verify the effect of course
-and activity deletion in the deployed Moodle version as part of operational
-acceptance testing.
+the courses containing BigBlueButton activities. When an activity or its
+course is deleted, DataHub removes its meeting and attendee records after
+Moodle has taken any recycle-bin backup. Deferred deletions retain analytics
+until the background task completes. A recycle-bin restore can restore the
+analytics included in that backup; existing backups remain subject to the
+site's backup retention policy.
+
+Deletion failures should be investigated in Moodle logs. Historical records
+whose BNX record is missing can be reviewed using the separate orphan-meeting
+cleanup mode described in the administrator guide.
+
+When deploying these callbacks without changing the installed plugin version,
+purge Moodle caches so cached callback and event-observer lists are refreshed.
 
 Raw callback data can contain more information than a rendered report. Limit
 direct database access, protect backups, and avoid copying raw payloads into

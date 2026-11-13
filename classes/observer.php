@@ -24,6 +24,104 @@ namespace bbbext_bnx_datahub;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class observer {
+    /** @var array<int, int[]> BNX records captured before course module deletion. */
+    private static array $deletionbnxids = [];
+
+    /**
+     * Capture BNX records before the activity and its extensions are deleted.
+     *
+     * @param \stdClass $cm Course module record.
+     */
+    public static function pre_course_module_delete(\stdClass $cm): void {
+        global $DB;
+
+        if ($DB->get_field('modules', 'name', ['id' => $cm->module]) !== 'bigbluebuttonbn') {
+            return;
+        }
+
+        self::$deletionbnxids[$cm->id] = $DB->get_fieldset_select(
+            'bbbext_bnx',
+            'id',
+            'bigbluebuttonbnid = :instanceid',
+            ['instanceid' => $cm->instance]
+        );
+    }
+
+    /**
+     * Delete analytics after the activity and its recycle-bin backup are processed.
+     *
+     * @param \core\event\course_module_deleted $event Course module deletion event.
+     */
+    public static function course_module_deleted(\core\event\course_module_deleted $event): void {
+        $bnxids = self::$deletionbnxids[$event->objectid] ?? [];
+        unset(self::$deletionbnxids[$event->objectid]);
+        if (!$bnxids || ($event->other['modulename'] ?? '') !== 'bigbluebuttonbn') {
+            return;
+        }
+
+        self::delete_analytics($bnxids);
+    }
+
+    /**
+     * Capture course mappings for synchronous or deferred deletion.
+     *
+     * @param \stdClass $course Course record.
+     */
+    public static function pre_course_delete(\stdClass $course): void {
+        global $DB;
+
+        $bnxids = $DB->get_fieldset_sql(
+            "SELECT bnx.id
+               FROM {bbbext_bnx} bnx
+               JOIN {bigbluebuttonbn} activity ON activity.id = bnx.bigbluebuttonbnid
+              WHERE activity.course = :courseid",
+            ['courseid' => $course->id]
+        );
+        $key = 'pending_course_' . $course->id;
+        $previous = get_config('bbbext_bnx_datahub', $key);
+        if ($previous !== false && $previous !== '') {
+            $bnxids = array_unique(array_merge(explode(',', $previous), $bnxids));
+        }
+        if ($bnxids) {
+            set_config($key, implode(',', $bnxids), 'bbbext_bnx_datahub');
+        }
+    }
+
+    /**
+     * Delete analytics after a course has been deleted.
+     *
+     * @param \core\event\course_deleted $event Course deletion event.
+     */
+    public static function course_deleted(\core\event\course_deleted $event): void {
+        $key = 'pending_course_' . $event->objectid;
+        $value = get_config('bbbext_bnx_datahub', $key);
+        if ($value !== false && $value !== '') {
+            self::delete_analytics(array_map('intval', explode(',', $value)));
+            unset_config($key, 'bbbext_bnx_datahub');
+        }
+    }
+
+    /**
+     * Delete analytics belonging to BNX records.
+     *
+     * @param int[] $bnxids BNX record IDs.
+     */
+    private static function delete_analytics(array $bnxids): void {
+        global $DB;
+
+        $transaction = $DB->start_delegated_transaction();
+        foreach (array_chunk($bnxids, 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'bnxid');
+            $DB->delete_records_select(
+                'bbbext_bnx_datahub_meeting_user',
+                "meetingid IN (SELECT id FROM {bbbext_bnx_datahub_meeting} WHERE bnxid $insql)",
+                $params
+            );
+            $DB->delete_records_select('bbbext_bnx_datahub_meeting', "bnxid $insql", $params);
+        }
+        $transaction->allow_commit();
+    }
+
     /**
      * Prevent DataHub from remaining enabled when BNX is unavailable.
      *

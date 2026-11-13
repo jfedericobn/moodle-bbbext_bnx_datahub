@@ -17,7 +17,7 @@
 namespace bbbext_bnx_datahub\local\services;
 
 /**
- * Previews or removes attendee records without a meeting.
+ * Previews or removes orphaned analytics records.
  *
  * @package   bbbext_bnx_datahub
  * @copyright 2026 onwards, Blindside Networks Inc
@@ -26,6 +26,9 @@ namespace bbbext_bnx_datahub\local\services;
 class orphan_cleanup_service {
     /** @var string Condition matching attendee records without a meeting. */
     private const ORPHAN_CONDITION = 'meetingid NOT IN (SELECT id FROM {bbbext_bnx_datahub_meeting})';
+
+    /** @var string Condition matching meetings without a BNX record. */
+    private const ORPHAN_MEETING_CONDITION = 'bnxid NOT IN (SELECT id FROM {bbbext_bnx})';
 
     /**
      * Count orphan attendees and remove them only when requested.
@@ -42,5 +45,29 @@ class orphan_cleanup_service {
         }
 
         return $count;
+    }
+
+    /**
+     * Count and optionally delete meetings without a BNX record and their attendees.
+     *
+     * @param bool $apply Whether to delete the orphan meetings and attendees.
+     * @return array{meetings: int, attendees: int} Counts before deletion.
+     */
+    public static function clean_orphan_meetings(bool $apply = false): array {
+        global $DB;
+
+        $attendeecondition = 'meetingid IN (SELECT id FROM {bbbext_bnx_datahub_meeting} WHERE '
+            . self::ORPHAN_MEETING_CONDITION . ')';
+        $transaction = $DB->start_delegated_transaction();
+        $counts = [
+            'meetings' => $DB->count_records_select('bbbext_bnx_datahub_meeting', self::ORPHAN_MEETING_CONDITION),
+            'attendees' => $DB->count_records_select('bbbext_bnx_datahub_meeting_user', $attendeecondition),
+        ];
+        if ($apply && $counts['meetings'] > 0) {
+            $DB->delete_records_select('bbbext_bnx_datahub_meeting_user', $attendeecondition);
+            $DB->delete_records_select('bbbext_bnx_datahub_meeting', self::ORPHAN_MEETING_CONDITION);
+        }
+        $transaction->allow_commit();
+        return $counts;
     }
 }

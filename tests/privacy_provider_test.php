@@ -61,10 +61,12 @@ final class privacy_provider_test extends provider_testcase {
         $cm = get_coursemodule_from_instance('bigbluebuttonbn', $bbb->id);
         $context = context_module::instance($cm->id);
 
-        // Create BNX record.
-        $bnx = new stdClass();
-        $bnx->bigbluebuttonbnid = $bbb->id;
-        $bnx->id = $DB->insert_record('bbbext_bnx', $bnx);
+        $bnx = $DB->get_record('bbbext_bnx', ['bigbluebuttonbnid' => $bbb->id]);
+        if (!$bnx) {
+            $bnx = new stdClass();
+            $bnx->bigbluebuttonbnid = $bbb->id;
+            $bnx->id = $DB->insert_record('bbbext_bnx', $bnx);
+        }
 
         // Create meeting record.
         $meeting = new stdClass();
@@ -99,6 +101,226 @@ final class privacy_provider_test extends provider_testcase {
         $DB->insert_record('bbbext_bnx_datahub_meeting_user', $meetinguser);
 
         return [$course, $bbb, $cm, $context];
+    }
+
+    /**
+     * Test activity deletion removes only its analytics when DataHub is disabled.
+     */
+    public function test_activity_deletion_removes_analytics(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/filelib.php');
+        set_config('sortorder', 1, 'bbbext_bnx');
+        set_config('sortorder', 2, 'bbbext_bnx_datahub');
+        set_config('coursebinenable', 0, 'tool_recyclebin');
+
+        $user = $this->getDataGenerator()->create_user();
+        [$course, $bbb, $cm] = $this->create_test_data($user->id);
+        [$othercourse, $otherbbb] = $this->create_test_data($user->id);
+        $meetingsql = "SELECT meeting.id
+                         FROM {bbbext_bnx_datahub_meeting} meeting
+                         JOIN {bbbext_bnx} bnx ON bnx.id = meeting.bnxid
+                        WHERE bnx.bigbluebuttonbnid = :instanceid";
+        $meetingid = $DB->get_field_sql($meetingsql, ['instanceid' => $bbb->id], MUST_EXIST);
+        $othermeetingid = $DB->get_field_sql($meetingsql, ['instanceid' => $otherbbb->id], MUST_EXIST);
+        set_config('disabled', 1, 'bbbext_bnx_datahub');
+
+        \curl::mock_response('<response><returncode>SUCCESS</returncode></response>');
+        (new \core_courseformat\local\cmactions($course))->delete($cm->id);
+
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $meetingid]));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $othermeetingid]));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $othermeetingid]));
+    }
+
+    /**
+     * Test deferred activity deletion with the reverse extension order.
+     */
+    public function test_async_activity_deletion_removes_analytics(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/filelib.php');
+        $this->setAdminUser();
+        set_config('sortorder', 2, 'bbbext_bnx');
+        set_config('sortorder', 1, 'bbbext_bnx_datahub');
+        set_config('coursebinenable', 1, 'tool_recyclebin');
+        $user = $this->getDataGenerator()->create_user();
+        [$course, $bbb, $cm] = $this->create_test_data($user->id);
+        $meetingid = $DB->get_field_sql(
+            "SELECT meeting.id
+               FROM {bbbext_bnx_datahub_meeting} meeting
+               JOIN {bbbext_bnx} bnx ON bnx.id = meeting.bnxid
+              WHERE bnx.bigbluebuttonbnid = :instanceid",
+            ['instanceid' => $bbb->id],
+            MUST_EXIST
+        );
+
+        (new \core_courseformat\local\cmactions($course))->delete($cm->id, true);
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        \curl::mock_response('<response><returncode>SUCCESS</returncode></response>');
+        ob_start();
+        $this->run_all_adhoc_tasks();
+        ob_end_clean();
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $meetingid]));
+    }
+
+    /**
+     * Test course deletion removes its activity analytics.
+     */
+    public function test_course_deletion_removes_analytics(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/filelib.php');
+        set_config('coursebinenable', 0, 'tool_recyclebin');
+        set_config('categorybinenable', 0, 'tool_recyclebin');
+
+        $user = $this->getDataGenerator()->create_user();
+        [$course, $bbb] = $this->create_test_data($user->id);
+        $meetingid = $DB->get_field_sql(
+            "SELECT meeting.id
+               FROM {bbbext_bnx_datahub_meeting} meeting
+               JOIN {bbbext_bnx} bnx ON bnx.id = meeting.bnxid
+              WHERE bnx.bigbluebuttonbnid = :instanceid",
+            ['instanceid' => $bbb->id],
+            MUST_EXIST
+        );
+
+        \curl::mock_response('<response><returncode>SUCCESS</returncode></response>');
+        $this->assertTrue(delete_course($course, false, false));
+
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $meetingid]));
+    }
+
+    /**
+     * Test deferred course deletion while DataHub is disabled.
+     */
+    public function test_async_course_deletion_removes_analytics(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/filelib.php');
+        $this->setAdminUser();
+        set_config('coursebinenable', 0, 'tool_recyclebin');
+        set_config('categorybinenable', 0, 'tool_recyclebin');
+        set_config('enablecourseasyncdeletion', 1, 'moodlecourse');
+        $user = $this->getDataGenerator()->create_user();
+        [$course, $bbb] = $this->create_test_data($user->id);
+        [$othercourse, $otherbbb] = $this->create_test_data($user->id);
+        $meetingsql = "SELECT meeting.id
+                         FROM {bbbext_bnx_datahub_meeting} meeting
+                         JOIN {bbbext_bnx} bnx ON bnx.id = meeting.bnxid
+                        WHERE bnx.bigbluebuttonbnid = :instanceid";
+        $meetingid = $DB->get_field_sql($meetingsql, ['instanceid' => $bbb->id], MUST_EXIST);
+        $othermeetingid = $DB->get_field_sql($meetingsql, ['instanceid' => $otherbbb->id], MUST_EXIST);
+        set_config('disabled', 1, 'bbbext_bnx_datahub');
+
+        $this->assertTrue(delete_course($course, false));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        $this->assertNotFalse(get_config('bbbext_bnx_datahub', 'pending_course_' . $course->id));
+
+        \curl::mock_response('<response><returncode>SUCCESS</returncode></response>');
+        ob_start();
+        $this->run_all_adhoc_tasks();
+        ob_end_clean();
+
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $meetingid]));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $othermeetingid]));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $othermeetingid]));
+        $this->assertFalse(get_config('bbbext_bnx_datahub', 'pending_course_' . $course->id));
+    }
+
+    /**
+     * Test activity recycle-bin backup and restore retain analytics.
+     */
+    public function test_activity_recycle_bin_restores_analytics(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/filelib.php');
+        $this->setAdminUser();
+        set_config('coursebinenable', 1, 'tool_recyclebin');
+        $user = $this->getDataGenerator()->create_user();
+        [$course, $bbb, $cm] = $this->create_test_data($user->id);
+        $this->getDataGenerator()->enrol_user($user->id, $course->id);
+        $meetingid = $DB->get_field_sql(
+            "SELECT meeting.id
+               FROM {bbbext_bnx_datahub_meeting} meeting
+               JOIN {bbbext_bnx} bnx ON bnx.id = meeting.bnxid
+              WHERE bnx.bigbluebuttonbnid = :instanceid",
+            ['instanceid' => $bbb->id],
+            MUST_EXIST
+        );
+
+        \curl::mock_response('<response><returncode>SUCCESS</returncode></response>');
+        (new \core_courseformat\local\cmactions($course))->delete($cm->id);
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $meetingid]));
+        $bin = new \tool_recyclebin\course_bin($course->id);
+        $items = $bin->get_items();
+        $this->assertCount(1, $items);
+        $bin->restore_item(reset($items));
+
+        $restoredmeeting = $DB->get_record(
+            'bbbext_bnx_datahub_meeting',
+            ['internalmeetingid' => 'int-privacy-test'],
+            '*',
+            MUST_EXIST
+        );
+        $this->assertNotEquals($meetingid, $restoredmeeting->id);
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting_user', [
+            'meetingid' => $restoredmeeting->id,
+            'userid' => $user->id,
+        ]));
+    }
+
+    /**
+     * Test deferred course recycle-bin backup and restore retain analytics.
+     */
+    public function test_course_recycle_bin_restores_analytics(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/filelib.php');
+        $this->setAdminUser();
+        set_config('categorybinenable', 1, 'tool_recyclebin');
+        set_config('enablecourseasyncdeletion', 1, 'moodlecourse');
+        $user = $this->getDataGenerator()->create_user();
+        [$course, $bbb] = $this->create_test_data($user->id);
+        $this->getDataGenerator()->enrol_user($user->id, $course->id);
+        $meetingid = $DB->get_field_sql(
+            "SELECT meeting.id
+               FROM {bbbext_bnx_datahub_meeting} meeting
+               JOIN {bbbext_bnx} bnx ON bnx.id = meeting.bnxid
+              WHERE bnx.bigbluebuttonbnid = :instanceid",
+            ['instanceid' => $bbb->id],
+            MUST_EXIST
+        );
+
+        $this->assertTrue(delete_course($course, false));
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        \curl::mock_response('<response><returncode>SUCCESS</returncode></response>');
+        ob_start();
+        $this->run_all_adhoc_tasks();
+        ob_end_clean();
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting', ['id' => $meetingid]));
+        $this->assertFalse($DB->record_exists('bbbext_bnx_datahub_meeting_user', ['meetingid' => $meetingid]));
+        $bin = new \tool_recyclebin\category_bin($course->category);
+        $items = $bin->get_items();
+        $this->assertCount(1, $items);
+        $bin->restore_item(reset($items));
+
+        $restoredmeeting = $DB->get_record(
+            'bbbext_bnx_datahub_meeting',
+            ['internalmeetingid' => 'int-privacy-test'],
+            '*',
+            MUST_EXIST
+        );
+        $this->assertNotEquals($meetingid, $restoredmeeting->id);
+        $this->assertTrue($DB->record_exists('bbbext_bnx_datahub_meeting_user', [
+            'meetingid' => $restoredmeeting->id,
+            'userid' => $user->id,
+        ]));
     }
 
     /**

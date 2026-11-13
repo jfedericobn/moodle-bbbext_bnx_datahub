@@ -27,6 +27,14 @@ defined('MOODLE_INTERNAL') || die();
 
 $observers = [
     [
+        'eventname' => '\\core\\event\\course_deleted',
+        'callback' => '\\bbbext_bnx_datahub\\observer::course_deleted',
+    ],
+    [
+        'eventname' => '\\core\\event\\course_module_deleted',
+        'callback' => '\\bbbext_bnx_datahub\\observer::course_module_deleted',
+    ],
+    [
         'eventname' => '\\core\\event\\config_log_created',
         'callback' => '\\bbbext_bnx_datahub\\observer::config_log_created',
     ],
