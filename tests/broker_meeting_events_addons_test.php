@@ -138,6 +138,21 @@ final class broker_meeting_events_addons_test extends advanced_testcase {
     }
 
     /**
+     * Invalid callback data objects are ignored without writing records.
+     */
+    public function test_process_action_rejects_invalid_data_object(): void {
+        global $DB;
+
+        $this->enable_bnx_plugin();
+        [$course, $bbb, $instance] = $this->create_bbb_with_bnx();
+        foreach (['null', '{}', '{"data":[]}', '{"data":"invalid"}'] as $jsondata) {
+            (new broker_meeting_events_addons($instance, $jsondata))->process_action();
+            $this->assertDebuggingCalled('Warning: Missing data object in JSON.', DEBUG_DEVELOPER);
+        }
+        $this->assertSame(0, $DB->count_records('bbbext_bnx_datahub_meeting'));
+    }
+
+    /**
      * Test process_action does nothing when BNX is disabled.
      */
     public function test_process_action_skips_when_bnx_disabled(): void {

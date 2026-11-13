@@ -150,6 +150,37 @@ final class logger_test extends advanced_testcase {
     }
 
     /**
+     * Meeting names can be absent or exceed the database field length.
+     */
+    public function test_log_meeting_normalises_names_and_rejects_invalid_identifiers(): void {
+        global $DB;
+
+        [$course, $bbb] = $this->create_bbb_with_bnx();
+        $instance = instance::get_from_instanceid($bbb->id);
+        $data = $this->create_meeting_data();
+        unset($data->data->metadata);
+        $meetingid = logger::log_meeting($instance, $data);
+        $this->assertSame('Test Meeting', $DB->get_field('bbbext_bnx_datahub_meeting', 'meetingname', ['id' => $meetingid]));
+
+        $data = $this->create_meeting_data();
+        $data->data->metadata->meeting_name = str_repeat('é', 300);
+        $this->assertSame($meetingid, logger::log_meeting($instance, $data));
+        $name = $DB->get_field('bbbext_bnx_datahub_meeting', 'meetingname', ['id' => $meetingid]);
+        $this->assertSame(str_repeat('é', 255), $name);
+
+        foreach (['meeting_id', 'internal_meeting_id'] as $field) {
+            $data = $this->create_meeting_data();
+            $data->{$field} = str_repeat('a', 256);
+            $this->assertSame(0, logger::log_meeting($instance, $data));
+            $this->assertDebuggingCalled(
+                '[bbbext_bnx_datahub] logger::log_meeting Invalid meeting identifier.',
+                DEBUG_DEVELOPER
+            );
+        }
+        $this->assertSame(1, $DB->count_records('bbbext_bnx_datahub_meeting'));
+    }
+
+    /**
      * Test duration values and fallback timestamps.
      */
     public function test_log_meeting_duration_fallbacks(): void {
@@ -278,6 +309,65 @@ final class logger_test extends advanced_testcase {
         }
 
         $this->assertSame(0, $DB->count_records('bbbext_bnx_datahub_meeting_user'));
+    }
+
+    /**
+     * Duplicate attendees must not prevent other attendees from being logged.
+     */
+    public function test_log_meeting_users_skips_duplicate_ids(): void {
+        global $DB;
+
+        [$course, $bbb] = $this->create_bbb_with_bnx();
+        $meetingid = logger::log_meeting(instance::get_from_instanceid($bbb->id), $this->create_meeting_data());
+        $user = $this->getDataGenerator()->create_user();
+        $otheruser = $this->getDataGenerator()->create_user();
+        $first = $this->create_attendee_data($user->id);
+        $duplicate = $this->create_attendee_data($user->id);
+        $duplicate->engagement->chats = 99;
+
+        $result = logger::log_meeting_users($meetingid, [$first, $duplicate, $this->create_attendee_data($otheruser->id)]);
+
+        $this->assertDebuggingCalled(
+            '[bbbext_bnx_datahub] logger::log_meeting_users Skipping duplicate participant.',
+            DEBUG_DEVELOPER
+        );
+        $this->assertCount(2, $result['ids']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertEquals(10, $DB->get_field('bbbext_bnx_datahub_meeting_user', 'engchats', [
+            'meetingid' => $meetingid,
+            'userid' => $user->id,
+        ]));
+    }
+
+    /**
+     * Malformed attendees are skipped while other attendees are retained.
+     */
+    public function test_log_meeting_users_skips_malformed_attendees(): void {
+        global $DB;
+
+        [$course, $bbb] = $this->create_bbb_with_bnx();
+        $meetingid = logger::log_meeting(instance::get_from_instanceid($bbb->id), $this->create_meeting_data());
+        $user = $this->getDataGenerator()->create_user();
+        $invalid = $this->create_attendee_data($user->id);
+        $invalid->engagement->chats = '2147483648';
+        $badtime = $this->create_attendee_data($user->id);
+        $badtime->joins = ['not a date'];
+        $valid = $this->create_attendee_data($user->id);
+        $valid->joins = ['2040-01-01T10:00:00Z'];
+
+        $result = logger::log_meeting_users($meetingid, [$invalid, $badtime, 'invalid', $valid]);
+
+        $this->assertDebuggingCalledCount(3);
+        $this->assertSame(3, $result['skipped']);
+        $this->assertCount(1, $result['ids']);
+        $this->assertEquals(10, $DB->get_field('bbbext_bnx_datahub_meeting_user', 'engchats', [
+            'meetingid' => $meetingid,
+            'userid' => $user->id,
+        ]));
+        $this->assertEquals(strtotime('2040-01-01T10:00:00Z'), $DB->get_field('bbbext_bnx_datahub_meeting_user', 'timejoin', [
+            'meetingid' => $meetingid,
+            'userid' => $user->id,
+        ]));
     }
 
     /**

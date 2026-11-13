@@ -46,17 +46,32 @@ class logger {
             return 0;
         }
 
+        foreach (['meeting_id', 'internal_meeting_id'] as $field) {
+            if (
+                !isset($data->{$field}) || !is_string($data->{$field}) || $data->{$field} === '' ||
+                \core_text::strlen($data->{$field}) > 255
+            ) {
+                debug_helper::developer('[bbbext_bnx_datahub] logger::log_meeting Invalid meeting identifier.');
+                return 0;
+            }
+        }
+
         $record = new stdClass();
         $record->bnxid = $bnx->id;
         $record->externalmeetingid = $data->meeting_id;
         $record->internalmeetingid = $data->internal_meeting_id;
-        $record->meetingname = $data->data->metadata->meeting_name;
+        $meetingname = $data->data->metadata->meeting_name ?? null;
+        $record->meetingname = \core_text::substr(
+            is_string($meetingname) && $meetingname !== '' ? $meetingname : $instance->get_meeting_name(),
+            0,
+            255
+        );
         $start = is_string($data->data->start ?? null) ? strtotime($data->data->start) : false;
         $finish = is_string($data->data->finish ?? null) ? strtotime($data->data->finish) : false;
         $record->timestart = $start === false ? 0 : $start;
         $record->timeend = $finish === false ? 0 : $finish;
         $record->duration = self::meeting_duration($data->data->duration ?? null, $start, $finish);
-        $record->metadata = json_encode($data->data->metadata);
+        $record->metadata = json_encode($data->data->metadata ?? null);
         // Remove the attendees section for privacy reasons.
         if (isset($data->data) && isset($data->data->attendees)) {
             unset($data->data->attendees);
@@ -164,15 +179,63 @@ class logger {
         $eligible = [];
         $userids = [];
         foreach ($attendees as $attendee) {
-            if (!isset($attendee->ext_user_id) || !is_numeric($attendee->ext_user_id)) {
-                debug_helper::developer(
-                    '[bbbext_bnx_datahub] logger::log_meeting_users Skipping non-Moodle participant'
-                    . ' (ext_user_id=' . ($attendee->ext_user_id ?? 'null') . ')'
-                );
+            if (!is_object($attendee)) {
+                debug_helper::developer('[bbbext_bnx_datahub] logger::log_meeting_users Skipping invalid participant.');
+                $skipped++;
+                continue;
+            }
+            $externaluserid = $attendee->ext_user_id ?? null;
+            if (
+                !(is_int($externaluserid) || (is_string($externaluserid) && ctype_digit($externaluserid))) ||
+                $externaluserid <= 0 || (float) $externaluserid >= (float) PHP_INT_MAX
+            ) {
+                debug_helper::developer('[bbbext_bnx_datahub] logger::log_meeting_users Skipping non-Moodle participant.');
+                $skipped++;
+                continue;
+            }
+            $fields = [
+                $attendee->duration ?? 0,
+                $attendee->score ?? 0,
+                $attendee->engagement->chats ?? 0,
+                $attendee->engagement->talks ?? 0,
+                $attendee->engagement->raisehand ?? 0,
+                $attendee->engagement->emojis ?? 0,
+                $attendee->engagement->poll_votes ?? 0,
+                $attendee->engagement->talk_time ?? 0,
+            ];
+            $valid = !isset($attendee->engagement) || is_object($attendee->engagement);
+            foreach ($fields as $value) {
+                if (
+                    !(is_int($value) || (is_string($value) && ctype_digit($value))) ||
+                    $value < 0 || (float) $value > 2147483647
+                ) {
+                    $valid = false;
+                    break;
+                }
+            }
+            foreach (['joins', 'leaves'] as $field) {
+                if (
+                    isset($attendee->{$field}) && (!is_array($attendee->{$field}) ||
+                    (isset($attendee->{$field}[0]) && !is_string($attendee->{$field}[0])))
+                ) {
+                    $valid = false;
+                } else if (isset($attendee->{$field}[0])) {
+                    if (strtotime($attendee->{$field}[0]) === false) {
+                        $valid = false;
+                    }
+                }
+            }
+            if (!$valid) {
+                debug_helper::developer('[bbbext_bnx_datahub] logger::log_meeting_users Skipping invalid participant.');
                 $skipped++;
                 continue;
             }
             $userid = (int) $attendee->ext_user_id;
+            if (isset($userids[$userid])) {
+                debug_helper::developer('[bbbext_bnx_datahub] logger::log_meeting_users Skipping duplicate participant.');
+                $skipped++;
+                continue;
+            }
             $eligible[] = ['userid' => $userid, 'data' => $attendee];
             $userids[$userid] = true;
         }
@@ -210,7 +273,7 @@ class logger {
             $record = new stdClass();
             $record->meetingid = $meetingid;
             $record->userid = $userid;
-            $record->fullname = fullname($user);
+            $record->fullname = \core_text::substr(fullname($user), 0, 255);
             $moderator = $data->moderator ?? false;
             $record->attendeerole = ($moderator === true || $moderator === 'true') ? 'moderator' : 'viewer';
             $record->timejoin = strtotime($data->joins[0] ?? '');

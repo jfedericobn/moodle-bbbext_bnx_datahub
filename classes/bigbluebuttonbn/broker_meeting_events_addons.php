@@ -43,7 +43,7 @@ class broker_meeting_events_addons extends \mod_bigbluebuttonbn\local\extension\
 
         $jsonobj = json_decode($this->data);
 
-        if (!isset($jsonobj->data)) {
+        if (!is_object($jsonobj) || !isset($jsonobj->data) || !is_object($jsonobj->data)) {
             debug_helper::developer('Warning: Missing data object in JSON.');
             return;
         }

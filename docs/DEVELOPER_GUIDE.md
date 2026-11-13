@@ -41,6 +41,16 @@ Meeting rows live in `bbbext_bnx_datahub_meeting`; attendee rows live in
 foreign-key chain. Event payloads may be incomplete or repeated, so logger
 code must be defensive and idempotent.
 
+Callback meeting identifiers must be nonempty strings of at most 255 characters;
+invalid identifiers are rejected rather than truncated. Missing meeting names
+fall back to the activity name, and names are limited to the database field size.
+Malformed attendee records are skipped without blocking other attendees. For
+duplicate Moodle user IDs in one callback, the first valid entry is retained and
+subsequent entries are skipped; their metrics are not merged. Developer debug
+logging reports skipped entries when enabled. Unexpected database errors still
+propagate, and earlier writes may already have succeeded. Duplicate semantics
+have not been confirmed against captured BigBlueButton callbacks.
+
 ## Report Builder integration
 
 DataHub's entities define reusable columns and filters. Datasources combine
