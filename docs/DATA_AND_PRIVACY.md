@@ -24,8 +24,25 @@ default.
 Changing session exclusion requires `bbbext/bnx_datahub:manageexclusions` at
 the activity context. Changes are logged as Moodle events. Exclusion only changes
 default reporting visibility; it does not delete data or remove it from privacy
-exports and deletion requests. Backups preserve the status, and older backups
-without it restore sessions as included.
+exports and deletion requests. Backups that include analytics preserve the
+status, and older backups without it restore sessions as included.
+
+## Backup and restore
+
+Meeting records, names, identifiers, metrics, and raw payloads can contain
+personal data. DataHub includes its analytics only when the activity's user
+data is included and the backup is not anonymized. Backups without users,
+anonymized backups, and backups excluding user data for the activity omit all
+DataHub meetings and attendees, including exclusion status.
+
+Restores also honor the activity's user-data setting and do not restore
+analytics from anonymized archives, including older archives that contain
+them. When an attendee cannot be mapped to a Moodle user, including a guest
+without a user account, that attendee is not restored. The meeting's metadata
+and raw payload and all attendee raw payloads for that meeting are also
+discarded because they may identify the missing participant. Fully mapped,
+non-anonymized restores retain those payloads. These rules also apply to
+recycle-bin restores.
 
 ## Moodle Privacy API
 

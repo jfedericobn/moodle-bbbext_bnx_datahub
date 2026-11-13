@@ -92,13 +92,11 @@ class backup_bbbext_bnx_datahub_subplugin extends backup_subplugin {
                          FROM {bbbext_bnx_datahub_meeting} m
                          JOIN {bbbext_bnx} b ON b.id = m.bnxid
                         WHERE b.bigbluebuttonbnid = ?";
-        $meeting->set_source_sql($meetingsql, [backup::VAR_PARENTID]);
-
-        // Source: meeting users linked to the meeting.
-        $meetinguser->set_source_table('bbbext_bnx_datahub_meeting_user', ['meetingid' => backup::VAR_PARENTID]);
-
-        // Annotate user ids for user data.
-        $meetinguser->annotate_ids('user', 'userid');
+        if ($this->get_setting_value('userinfo') && !$this->get_setting_value('anonymize')) {
+            $meeting->set_source_sql($meetingsql, [backup::VAR_PARENTID]);
+            $meetinguser->set_source_table('bbbext_bnx_datahub_meeting_user', ['meetingid' => backup::VAR_PARENTID]);
+            $meetinguser->annotate_ids('user', 'userid');
+        }
 
         return $subplugin;
     }

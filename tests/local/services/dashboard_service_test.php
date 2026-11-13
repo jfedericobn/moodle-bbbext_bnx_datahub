@@ -270,6 +270,193 @@ final class dashboard_service_test extends advanced_testcase {
     }
 
     /**
+     * Restricted backups must not include meeting analytics.
+     */
+    public function test_backup_without_users_omits_analytics(): void {
+        global $CFG, $DB, $USER;
+
+        require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
+        $this->setAdminUser();
+        $meeting = $this->insert_meeting(1000);
+        $DB->set_field('bbbext_bnx_datahub_meeting', 'rawdata', 'private-backup-marker', ['id' => $meeting->id]);
+        $DB->set_field('bbbext_bnx_datahub_meeting', 'metadata', 'private-metadata-marker', ['id' => $meeting->id]);
+        $DB->set_field('bbbext_bnx_datahub_meeting', 'internalmeetingid', 'private-meeting-id', ['id' => $meeting->id]);
+        $user = $this->getDataGenerator()->create_user();
+        $this->insert_attendee($meeting->id, $user->id);
+        $DB->set_field('bbbext_bnx_datahub_meeting_user', 'fullname', 'Private attendee name', ['meetingid' => $meeting->id]);
+        $DB->set_field('bbbext_bnx_datahub_meeting_user', 'rawdata', 'private-attendee-marker', ['meetingid' => $meeting->id]);
+        $cm = get_coursemodule_from_id('bigbluebuttonbn', $this->cmid, 0, false, MUST_EXIST);
+        foreach (['without-users', 'anonymized', 'activity-without-users'] as $mode) {
+            $controller = new \backup_controller(
+                \backup::TYPE_1COURSE,
+                $cm->course,
+                \backup::FORMAT_MOODLE,
+                \backup::INTERACTIVE_NO,
+                \backup::MODE_GENERAL,
+                $USER->id
+            );
+            $controller->get_plan()->get_setting('users')->set_value($mode !== 'without-users');
+            if ($mode === 'anonymized') {
+                $controller->get_plan()->get_setting('anonymize')->set_value(true);
+            } else if ($mode === 'activity-without-users') {
+                $controller->get_plan()->get_setting('bigbluebuttonbn_' . $cm->id . '_userinfo')->set_value(false);
+            }
+            $controller->execute_plan();
+            $backupfile = $controller->get_results()['backup_destination'];
+            $path = $CFG->dataroot . '/temp/backup/datahub-' . $mode . '-test';
+            $backupfile->extract_to_pathname(get_file_packer('application/vnd.moodle.backup'), $path);
+            $controller->destroy();
+
+            $files = glob($path . '/activities/bigbluebuttonbn_*/bigbluebuttonbn.xml');
+            $this->assertCount(1, $files, $mode);
+            $document = new \DOMDocument();
+            $this->assertTrue($document->load($files[0]), $mode);
+            $this->assertCount(0, (new \DOMXPath($document))->query('//bbbext_bnx_datahub_meetings/meeting'), $mode);
+            $this->assertStringNotContainsString('private-backup-marker', file_get_contents($files[0]), $mode);
+            $this->assertStringNotContainsString('private-metadata-marker', file_get_contents($files[0]), $mode);
+            $this->assertStringNotContainsString('private-meeting-id', file_get_contents($files[0]), $mode);
+            $this->assertStringNotContainsString('Private attendee name', file_get_contents($files[0]), $mode);
+            $this->assertStringNotContainsString('private-attendee-marker', file_get_contents($files[0]), $mode);
+        }
+    }
+
+    /**
+     * Legacy archives respect restore settings and missing user mappings.
+     */
+    public function test_legacy_restore_respects_privacy_settings(): void {
+        global $CFG, $DB, $USER;
+
+        require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
+        require_once($CFG->dirroot . '/backup/util/includes/restore_includes.php');
+        $this->setAdminUser();
+        $meeting = $this->insert_meeting(1000);
+        $DB->set_field('bbbext_bnx_datahub_meeting', 'excluded', 1, ['id' => $meeting->id]);
+        $DB->set_field('bbbext_bnx_datahub_meeting', 'metadata', 'private-metadata-marker', ['id' => $meeting->id]);
+        $DB->set_field('bbbext_bnx_datahub_meeting', 'rawdata', 'private-backup-marker', ['id' => $meeting->id]);
+        $user = $this->getDataGenerator()->create_user();
+        $unmappeduser = $this->getDataGenerator()->create_user();
+        $seconduser = $this->getDataGenerator()->create_user();
+        $cm = get_coursemodule_from_id('bigbluebuttonbn', $this->cmid, 0, false, MUST_EXIST);
+        $course = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
+        $this->getDataGenerator()->enrol_user($user->id, $course->id);
+        $this->getDataGenerator()->enrol_user($unmappeduser->id, $course->id);
+        $this->getDataGenerator()->enrol_user($seconduser->id, $course->id);
+        $this->insert_attendee($meeting->id, $user->id);
+        $this->insert_attendee($meeting->id, $unmappeduser->id);
+        $this->insert_attendee($meeting->id, $seconduser->id);
+        $DB->set_field('bbbext_bnx_datahub_meeting_user', 'rawdata', 'private-attendee-marker', [
+            'meetingid' => $meeting->id,
+            'userid' => $user->id,
+        ]);
+        $DB->insert_record('bbbext_bnx_datahub_meeting_user', (object) [
+            'meetingid' => $meeting->id,
+            'userid' => null,
+            'fullname' => 'Private guest name',
+            'attendeerole' => 'viewer',
+        ]);
+
+        $controller = new \backup_controller(
+            \backup::TYPE_1COURSE,
+            $course->id,
+            \backup::FORMAT_MOODLE,
+            \backup::INTERACTIVE_NO,
+            \backup::MODE_GENERAL,
+            $USER->id
+        );
+        $controller->get_plan()->get_setting('users')->set_value(true);
+        $controller->execute_plan();
+        $backupfile = $controller->get_results()['backup_destination'];
+        $controller->destroy();
+
+        foreach (['fully-mapped', 'unmapped', 'without-users', 'activity-without-users', 'anonymized'] as $mode) {
+            $directory = 'datahub-legacy-' . $mode;
+            $path = $CFG->dataroot . '/temp/backup/' . $directory;
+            $backupfile->extract_to_pathname(get_file_packer('application/vnd.moodle.backup'), $path);
+            $files = glob($path . '/activities/bigbluebuttonbn_*/bigbluebuttonbn.xml');
+            $this->assertCount(1, $files);
+            $document = new \DOMDocument();
+            $this->assertTrue($document->load($files[0]));
+            $xpath = new \DOMXPath($document);
+            $this->assertCount(1, $xpath->query('//bbbext_bnx_datahub_meetings/meeting'));
+            $this->assertStringContainsString('private-backup-marker', file_get_contents($files[0]));
+            $this->assertStringContainsString('private-metadata-marker', file_get_contents($files[0]));
+            $this->assertStringContainsString('private-attendee-marker', file_get_contents($files[0]));
+            $this->assertStringContainsString('Private guest name', file_get_contents($files[0]));
+
+            if ($mode === 'fully-mapped') {
+                $nodes = $xpath->query('//meeting_user[userid!="' . $user->id . '" and userid!="' . $seconduser->id . '"]');
+                $this->assertCount(2, $nodes);
+                foreach (iterator_to_array($nodes) as $node) {
+                    $node->parentNode->removeChild($node);
+                }
+                $document->save($files[0]);
+            } else if ($mode === 'unmapped') {
+                $nodes = $xpath->query('//meeting_user[userid="' . $unmappeduser->id . '"]/userid');
+                $this->assertCount(1, $nodes);
+                $nodes->item(0)->nodeValue = '987654321';
+                $document->save($files[0]);
+            } else if ($mode === 'anonymized') {
+                $backupinfo = new \DOMDocument();
+                $this->assertTrue($backupinfo->load($path . '/moodle_backup.xml'));
+                $settings = (new \DOMXPath($backupinfo))->query('//setting[name="anonymize"]/value');
+                $this->assertCount(1, $settings);
+                $settings->item(0)->nodeValue = '1';
+                $backupinfo->save($path . '/moodle_backup.xml');
+            }
+
+            $newcourseid = \restore_dbops::create_new_course(
+                $course->fullname,
+                $course->shortname . '_' . $mode,
+                $course->category
+            );
+            $restore = new \restore_controller(
+                $directory,
+                $newcourseid,
+                \backup::INTERACTIVE_NO,
+                \backup::MODE_GENERAL,
+                $USER->id,
+                \backup::TARGET_NEW_COURSE
+            );
+            if ($mode === 'without-users') {
+                $restore->get_plan()->get_setting('users')->set_value(false);
+            } else if ($mode === 'activity-without-users') {
+                $restore->get_plan()->get_setting('bigbluebuttonbn_' . $cm->id . '_userinfo')->set_value(false);
+            }
+            $this->assertTrue($restore->execute_precheck());
+            $restore->execute_plan();
+            $restore->destroy();
+            $restoredcms = array_filter(
+                get_fast_modinfo($newcourseid)->get_cms(),
+                static fn($candidate) => $candidate->modname === 'bigbluebuttonbn'
+            );
+            $this->assertCount(1, $restoredcms);
+            $restoredcm = reset($restoredcms);
+            $meetings = meeting_service::get_all_by_cmid($restoredcm->id);
+            if ($mode !== 'fully-mapped' && $mode !== 'unmapped') {
+                $this->assertCount(0, $meetings, $mode);
+                continue;
+            }
+            $this->assertCount(1, $meetings);
+            $restoredmeeting = reset($meetings);
+            $this->assertSame(1, (int) $restoredmeeting->excluded);
+            $record = $DB->get_record('bbbext_bnx_datahub_meeting', ['id' => $restoredmeeting->id], '*', MUST_EXIST);
+            $this->assertSame($mode === 'fully-mapped' ? 'private-metadata-marker' : null, $record->metadata);
+            $this->assertSame($mode === 'fully-mapped' ? 'private-backup-marker' : null, $record->rawdata);
+            $attendees = $DB->get_records('bbbext_bnx_datahub_meeting_user', ['meetingid' => $restoredmeeting->id]);
+            $this->assertCount(2, $attendees);
+            $attendeesbyuser = [];
+            foreach ($attendees as $attendee) {
+                $attendeesbyuser[$attendee->userid] = $attendee;
+            }
+            $this->assertArrayHasKey($user->id, $attendeesbyuser);
+            $this->assertArrayHasKey($seconduser->id, $attendeesbyuser);
+            $this->assertSame('User ' . $user->id, $attendeesbyuser[$user->id]->fullname);
+            $this->assertSame($mode === 'fully-mapped' ? 'private-attendee-marker' : null, $attendeesbyuser[$user->id]->rawdata);
+            $this->assertSame($mode === 'fully-mapped' ? '{}' : null, $attendeesbyuser[$seconduser->id]->rawdata);
+        }
+    }
+
+    /**
      * Exclusion state survives a course backup and restore.
      */
     public function test_exclusion_survives_backup_restore(): void {

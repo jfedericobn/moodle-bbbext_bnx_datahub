@@ -33,6 +33,9 @@ require_once($CFG->dirroot . '/backup/moodle2/restore_subplugin.class.php');
  * @package   bbbext_bnx_datahub
  */
 class restore_bbbext_bnx_datahub_subplugin extends restore_subplugin {
+    /** @var array<int, bool> Meetings with at least one unmapped attendee. */
+    private array $unmappedmeetings = [];
+
     /**
      * Declare paths handled by this subplugin during restore.
      *
@@ -40,6 +43,9 @@ class restore_bbbext_bnx_datahub_subplugin extends restore_subplugin {
      */
     protected function define_bigbluebuttonbn_subplugin_structure() {
         $paths = [];
+        if (!$this->get_setting_value('userinfo') || !empty($this->task->get_info()->root_settings['anonymize'])) {
+            return $paths;
+        }
         $paths[] = new restore_path_element(
             'datahub_meeting',
             $this->get_pathfor('/bbbext_bnx_datahub_meetings/meeting')
@@ -110,6 +116,18 @@ class restore_bbbext_bnx_datahub_subplugin extends restore_subplugin {
         if (!empty($data->userid)) {
             $newuserid = $this->get_mappingid('user', $data->userid);
         }
+        if (empty($newuserid)) {
+            if (empty($this->unmappedmeetings[$newmeetingid])) {
+                $this->unmappedmeetings[$newmeetingid] = true;
+                $DB->update_record('bbbext_bnx_datahub_meeting', (object) [
+                    'id' => $newmeetingid,
+                    'metadata' => null,
+                    'rawdata' => null,
+                ]);
+                $DB->set_field('bbbext_bnx_datahub_meeting_user', 'rawdata', null, ['meetingid' => $newmeetingid]);
+            }
+            return;
+        }
 
         $record = new stdClass();
         $record->meetingid = $newmeetingid;
@@ -126,7 +144,7 @@ class restore_bbbext_bnx_datahub_subplugin extends restore_subplugin {
         $record->engemojis = $data->engemojis;
         $record->engpollvotes = $data->engpollvotes;
         $record->engtalktime = $data->engtalktime;
-        $record->rawdata = $data->rawdata ?? null;
+        $record->rawdata = empty($this->unmappedmeetings[$newmeetingid]) ? ($data->rawdata ?? null) : null;
 
         $DB->insert_record('bbbext_bnx_datahub_meeting_user', $record);
     }
