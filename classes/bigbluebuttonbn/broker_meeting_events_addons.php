@@ -48,6 +48,15 @@ class broker_meeting_events_addons extends \mod_bigbluebuttonbn\local\extension\
             return;
         }
 
+        $meetingid = $jsonobj->meeting_id ?? null;
+        if (
+            !is_string($meetingid) || $meetingid === '' ||
+            explode('-', explode('[', $meetingid)[0])[0] != $this->instance->get_instance_data()->meetingid
+        ) {
+            debug_helper::developer('[bbbext_bnx_datahub] Ignoring callback for a different meeting.');
+            return;
+        }
+
         // Deep clone to prevent log_meeting() from modifying the original object.
         $meetingdata = json_decode(json_encode($jsonobj));
         $meetingid = logger::log_meeting($this->instance, $meetingdata);

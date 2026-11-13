@@ -26,6 +26,11 @@ BigBlueButton callback -> parent broker -> DataHub broker addon
 
 Do not add a parallel HTTP endpoint for callback ingestion. The parent broker
 is responsible for authenticating and dispatching BigBlueButton events.
+DataHub checks the meeting ID against the parent activity using the parent's
+group-aware prefix rule and rejects an internal meeting ID already linked to a
+different activity. The parent does not pass its callback result to the addon,
+so replays still reach DataHub and can update existing records. This permits
+retries after partial ingestion but does not prevent changed replay payloads.
 
 ## Persistence services
 

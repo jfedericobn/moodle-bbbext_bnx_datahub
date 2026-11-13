@@ -29,6 +29,9 @@ use stdClass;
  * @covers    \bbbext_bnx_datahub\bigbluebuttonbn\broker_meeting_events_addons
  */
 final class broker_meeting_events_addons_test extends advanced_testcase {
+    /** @var string External meeting ID for the current test instance. */
+    private string $meetingid;
+
     /**
      * Set up for each test.
      */
@@ -84,6 +87,7 @@ final class broker_meeting_events_addons_test extends advanced_testcase {
         }
 
         $instance = instance::get_from_instanceid($bbb->id);
+        $this->meetingid = $instance->get_meeting_id();
 
         return [$course, $bbb, $instance];
     }
@@ -96,7 +100,7 @@ final class broker_meeting_events_addons_test extends advanced_testcase {
      */
     private function create_meeting_events_json(array $attendees = []): string {
         $data = [
-            'meeting_id' => 'ext-meeting-events-test',
+            'meeting_id' => $this->meetingid,
             'internal_meeting_id' => 'int-meeting-events-test',
             'data' => [
                 'metadata' => [
@@ -150,6 +154,86 @@ final class broker_meeting_events_addons_test extends advanced_testcase {
             $this->assertDebuggingCalled('Warning: Missing data object in JSON.', DEBUG_DEVELOPER);
         }
         $this->assertSame(0, $DB->count_records('bbbext_bnx_datahub_meeting'));
+    }
+
+    /**
+     * A callback rejected by the parent must not be stored by the addon.
+     */
+    public function test_process_action_rejects_foreign_meeting(): void {
+        global $DB;
+
+        $this->enable_bnx_plugin();
+        [$course, $bbb, $instance] = $this->create_bbb_with_bnx();
+        $user = $this->getDataGenerator()->create_user();
+        $payload = json_decode($this->create_meeting_events_json([$this->create_attendee_data($user->id)]));
+        $payload->meeting_id = 'foreign-meeting';
+        $jsondata = json_encode($payload);
+        $this->assertStringContainsString(
+            '410 Gone',
+            \mod_bigbluebuttonbn\meeting::meeting_events($instance, json_decode($jsondata))
+        );
+
+        (new broker_meeting_events_addons($instance, $jsondata))->process_action();
+
+        $this->assertDebuggingCalled('[bbbext_bnx_datahub] Ignoring callback for a different meeting.', DEBUG_DEVELOPER);
+        $this->assertSame(0, $DB->count_records('bbbext_bnx_datahub_meeting'));
+        $this->assertSame(0, $DB->count_records('bbbext_bnx_datahub_meeting_user'));
+    }
+
+    /**
+     * The parent and addon accept normal and grouped meetings, including replays.
+     */
+    public function test_process_action_accepts_owned_meetings_and_replays(): void {
+        global $DB;
+
+        $this->enable_bnx_plugin();
+        [$course, $bbb, $instance] = $this->create_bbb_with_bnx();
+        $user = $this->getDataGenerator()->create_user();
+        foreach ([0, 42] as $groupid) {
+            $payload = json_decode($this->create_meeting_events_json([$this->create_attendee_data($user->id)]));
+            $payload->meeting_id = $instance->get_meeting_id($groupid);
+            $payload->internal_meeting_id = 'internal-' . $groupid;
+            $jsondata = json_encode($payload);
+            $this->assertStringContainsString('200 Accepted', \mod_bigbluebuttonbn\meeting::meeting_events($instance, $payload));
+            (new broker_meeting_events_addons($instance, $jsondata))->process_action();
+            $this->assertStringContainsString('202 Accepted', \mod_bigbluebuttonbn\meeting::meeting_events($instance, $payload));
+            (new broker_meeting_events_addons($instance, $jsondata))->process_action();
+            $payload->data->attendees[0]->engagement->chats = 25;
+            (new broker_meeting_events_addons($instance, json_encode($payload)))->process_action();
+            $meeting = $DB->get_record('bbbext_bnx_datahub_meeting', ['internalmeetingid' => $payload->internal_meeting_id]);
+            $this->assertEquals(25, $DB->get_field('bbbext_bnx_datahub_meeting_user', 'engchats', [
+                'meetingid' => $meeting->id,
+                'userid' => $user->id,
+            ]));
+        }
+        $this->assertSame(2, $DB->count_records('bbbext_bnx_datahub_meeting'));
+        $this->assertSame(2, $DB->count_records('bbbext_bnx_datahub_meeting_user'));
+    }
+
+    /**
+     * An internal meeting ID belonging to another activity cannot be reassigned.
+     */
+    public function test_process_action_rejects_foreign_internal_meeting(): void {
+        global $DB;
+
+        $this->enable_bnx_plugin();
+        [$firstcourse, $firstbbb, $firstinstance] = $this->create_bbb_with_bnx();
+        $user = $this->getDataGenerator()->create_user();
+        $firstpayload = $this->create_meeting_events_json([$this->create_attendee_data($user->id)]);
+        (new broker_meeting_events_addons($firstinstance, $firstpayload))->process_action();
+        $meeting = $DB->get_record('bbbext_bnx_datahub_meeting', [], '*', MUST_EXIST);
+
+        [$secondcourse, $secondbbb, $secondinstance] = $this->create_bbb_with_bnx();
+        $secondpayload = $this->create_meeting_events_json([$this->create_attendee_data($user->id)]);
+        (new broker_meeting_events_addons($secondinstance, $secondpayload))->process_action();
+
+        $this->assertDebuggingCalled(
+            '[bbbext_bnx_datahub] logger::log_meeting Internal meeting belongs to another activity.',
+            DEBUG_DEVELOPER
+        );
+        $this->assertEquals($meeting->bnxid, $DB->get_field('bbbext_bnx_datahub_meeting', 'bnxid', ['id' => $meeting->id]));
+        $this->assertSame(1, $DB->count_records('bbbext_bnx_datahub_meeting'));
+        $this->assertSame(1, $DB->count_records('bbbext_bnx_datahub_meeting_user'));
     }
 
     /**
