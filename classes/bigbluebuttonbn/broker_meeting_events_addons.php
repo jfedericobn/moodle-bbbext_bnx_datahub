@@ -70,7 +70,7 @@ class broker_meeting_events_addons extends \mod_bigbluebuttonbn\local\extension\
             // resolution are amortized to one DB round-trip per query (OL-3.1.2).
             logger::log_meeting_users($meetingid, $jsonobj->data->attendees);
         } else {
-            debug_helper::developer('Warning: No attendees found or invalid type. Data: ' . json_encode($jsonobj->data));
+            debug_helper::developer('Warning: No attendees found or invalid type.');
         }
     }
 }

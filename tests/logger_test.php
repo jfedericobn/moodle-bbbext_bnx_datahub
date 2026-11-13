@@ -371,6 +371,21 @@ final class logger_test extends advanced_testcase {
     }
 
     /**
+     * Unknown attendee diagnostics do not include the user ID.
+     */
+    public function test_log_meeting_users_redacts_unknown_user(): void {
+        [$course, $bbb] = $this->create_bbb_with_bnx();
+        $meetingid = logger::log_meeting(instance::get_from_instanceid($bbb->id), $this->create_meeting_data());
+        $result = logger::log_meeting_users($meetingid, [$this->create_attendee_data(2147483647)]);
+
+        $this->assertDebuggingCalled(
+            '[bbbext_bnx_datahub] logger::log_meeting_users Skipping unknown user.',
+            DEBUG_DEVELOPER
+        );
+        $this->assertSame(['ids' => [], 'skipped' => 1], $result);
+    }
+
+    /**
      * Test log_meeting_user creates a new attendee record.
      */
     public function test_log_meeting_user_creates_record(): void {

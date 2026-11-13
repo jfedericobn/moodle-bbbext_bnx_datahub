@@ -404,6 +404,25 @@ final class broker_meeting_events_addons_test extends advanced_testcase {
     }
 
     /**
+     * Attendee diagnostics do not disclose callback fields or values.
+     */
+    public function test_process_action_redacts_attendee_diagnostics(): void {
+        $this->enable_bnx_plugin();
+        [$course, $bbb, $instance] = $this->create_bbb_with_bnx();
+        foreach (['missing', 'invalid', 'empty'] as $case) {
+            $payload = json_decode($this->create_meeting_events_json());
+            $payload->data->metadata->private_field = 'Secret learner and course';
+            if ($case === 'missing') {
+                unset($payload->data->attendees);
+            } else if ($case === 'invalid') {
+                $payload->data->attendees = 'Private attendee identifier';
+            }
+            (new broker_meeting_events_addons($instance, json_encode($payload)))->process_action();
+            $this->assertDebuggingCalled('Warning: No attendees found or invalid type.', DEBUG_DEVELOPER);
+        }
+    }
+
+    /**
      * Test process_action stores engagement data correctly.
      */
     public function test_process_action_stores_engagement_data(): void {

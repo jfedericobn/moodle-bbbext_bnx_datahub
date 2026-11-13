@@ -267,9 +267,7 @@ class logger {
             $data = $entry['data'];
             $user = $users[$userid] ?? null;
             if ($user === null) {
-                debug_helper::developer(
-                    '[bbbext_bnx_datahub] logger::log_meeting_users Skipping unknown user (id=' . $userid . ')'
-                );
+                debug_helper::developer('[bbbext_bnx_datahub] logger::log_meeting_users Skipping unknown user.');
                 $skipped++;
                 continue;
             }
