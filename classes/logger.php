@@ -51,9 +51,11 @@ class logger {
         $record->externalmeetingid = $data->meeting_id;
         $record->internalmeetingid = $data->internal_meeting_id;
         $record->meetingname = $data->data->metadata->meeting_name;
-        $record->timestart = strtotime($data->data->start);
-        $record->timeend = strtotime($data->data->finish);
-        $record->duration = strtotime($data->data->duration);
+        $start = is_string($data->data->start ?? null) ? strtotime($data->data->start) : false;
+        $finish = is_string($data->data->finish ?? null) ? strtotime($data->data->finish) : false;
+        $record->timestart = $start === false ? 0 : $start;
+        $record->timeend = $finish === false ? 0 : $finish;
+        $record->duration = self::meeting_duration($data->data->duration ?? null, $start, $finish);
         $record->metadata = json_encode($data->data->metadata);
         // Remove the attendees section for privacy reasons.
         if (isset($data->data) && isset($data->data->attendees)) {
@@ -90,6 +92,33 @@ class logger {
         }
 
         return $r;
+    }
+
+    /**
+     * Convert a callback duration to seconds, falling back to valid meeting timestamps.
+     *
+     * @param mixed $duration Callback duration.
+     * @param int|false $start Parsed start timestamp.
+     * @param int|false $finish Parsed finish timestamp.
+     * @return int Duration in seconds.
+     */
+    private static function meeting_duration(mixed $duration, int|false $start, int|false $finish): int {
+        $maxduration = 2147483647;
+        if (is_int($duration) || (is_string($duration) && ctype_digit($duration))) {
+            if ($duration >= 0 && (float) $duration <= $maxduration) {
+                return (int) $duration;
+            }
+        } else if (is_string($duration) && preg_match('/^(\d{1,6}):([0-5]\d):([0-5]\d)$/D', $duration, $parts)) {
+            $seconds = (int) $parts[1] * 3600 + (int) $parts[2] * 60 + (int) $parts[3];
+            if ($seconds <= $maxduration) {
+                return $seconds;
+            }
+        }
+
+        if ($start !== false && $finish !== false && $finish >= $start && $finish - $start <= $maxduration) {
+            return $finish - $start;
+        }
+        return 0;
     }
 
     /**

@@ -104,7 +104,7 @@ final class broker_meeting_events_addons_test extends advanced_testcase {
                 ],
                 'start' => '2026-01-01T10:00:00Z',
                 'finish' => '2026-01-01T11:00:00Z',
-                'duration' => '01:00:00',
+                'duration' => 3600,
                 'attendees' => $attendees,
             ],
         ];

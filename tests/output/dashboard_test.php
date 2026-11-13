@@ -114,11 +114,13 @@ final class dashboard_test extends advanced_testcase {
         $this->assertNotEmpty($data->engagementchart);
         $this->assertNotEmpty($data->learnerchart);
         $this->assertCount(5, $data->session->sessionmetrics);
+        $this->assertSame('1 ' . get_string('hour'), $data->session->selectedsession->duration);
         $this->assertCount(1, $data->session->attendees);
         $this->assertSame('Ada Lovelace', $data->session->attendees[0]->fullname);
         $this->assertTrue($data->session->sessions[0]->selected);
         $this->assertStringContainsString('session.php?cmid=42', $data->session->sessionfragmenturl);
         $html = $OUTPUT->render_from_template('bbbext_bnx_datahub/dashboard', $data);
+        $this->assertStringContainsString($data->session->selectedsession->duration, $html);
         $this->assertStringContainsString('chart-area', $html);
         $this->assertLessThan(
             strpos($html, 'chart-area', strpos($html, 'bbbext-bnx-datahub-session-title')),

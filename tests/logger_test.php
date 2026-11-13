@@ -82,7 +82,7 @@ final class logger_test extends advanced_testcase {
         $data->data->metadata->meeting_name = 'Test Meeting';
         $data->data->start = '2026-01-01T10:00:00Z';
         $data->data->finish = '2026-01-01T11:00:00Z';
-        $data->data->duration = '01:00:00';
+        $data->data->duration = 3600;
         $data->data->attendees = [];
 
         return $data;
@@ -133,6 +133,72 @@ final class logger_test extends advanced_testcase {
         $this->assertEquals('ext-meeting-123', $record->externalmeetingid);
         $this->assertEquals('int-meeting-456', $record->internalmeetingid);
         $this->assertEquals('Test Meeting', $record->meetingname);
+    }
+
+    /**
+     * Test the documented numeric callback duration is stored in seconds.
+     */
+    public function test_log_meeting_stores_numeric_duration(): void {
+        global $DB;
+
+        [$course, $bbb] = $this->create_bbb_with_bnx();
+        $meetingdata = $this->create_meeting_data();
+        $meetingdata->data->duration = 16;
+        $meetingid = logger::log_meeting(instance::get_from_instanceid($bbb->id), $meetingdata);
+
+        $this->assertEquals(16, $DB->get_field('bbbext_bnx_datahub_meeting', 'duration', ['id' => $meetingid]));
+    }
+
+    /**
+     * Test duration values and fallback timestamps.
+     */
+    public function test_log_meeting_duration_fallbacks(): void {
+        global $DB;
+
+        [$course, $bbb] = $this->create_bbb_with_bnx();
+        $instance = instance::get_from_instanceid($bbb->id);
+        $cases = [
+            [0, 0],
+            ['0', 0],
+            ['3600', 3600],
+            [2147483647, 2147483647],
+            ['01:02:03', 3723],
+            ['999999:59:59', 3600],
+            [null, 3600],
+            [-1, 3600],
+            ['invalid', 3600],
+            ['01:60:00', 3600],
+            ['2147483648', 3600],
+            [1.5, 3600],
+        ];
+        foreach ($cases as [$duration, $expected]) {
+            $meetingdata = $this->create_meeting_data();
+            $meetingdata->data->duration = $duration;
+            $meetingid = logger::log_meeting($instance, $meetingdata);
+            $this->assertEquals($expected, $DB->get_field('bbbext_bnx_datahub_meeting', 'duration', ['id' => $meetingid]));
+        }
+
+        $meetingdata = $this->create_meeting_data();
+        unset($meetingdata->data->duration);
+        $meetingid = logger::log_meeting($instance, $meetingdata);
+        $this->assertEquals(3600, $DB->get_field('bbbext_bnx_datahub_meeting', 'duration', ['id' => $meetingid]));
+
+        $meetingdata = $this->create_meeting_data();
+        unset($meetingdata->data->duration);
+        $meetingdata->data->start = 'invalid';
+        $meetingid = logger::log_meeting($instance, $meetingdata);
+        $this->assertEquals(0, $DB->get_field('bbbext_bnx_datahub_meeting', 'duration', ['id' => $meetingid]));
+
+        $meetingdata = $this->create_meeting_data();
+        unset($meetingdata->data->duration, $meetingdata->data->finish);
+        $meetingid = logger::log_meeting($instance, $meetingdata);
+        $this->assertEquals(0, $DB->get_field('bbbext_bnx_datahub_meeting', 'duration', ['id' => $meetingid]));
+
+        $meetingdata = $this->create_meeting_data();
+        unset($meetingdata->data->duration);
+        $meetingdata->data->finish = '2026-01-01T09:00:00Z';
+        $meetingid = logger::log_meeting($instance, $meetingdata);
+        $this->assertEquals(0, $DB->get_field('bbbext_bnx_datahub_meeting', 'duration', ['id' => $meetingid]));
     }
 
     /**
